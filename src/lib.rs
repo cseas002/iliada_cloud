@@ -6,6 +6,7 @@
 //! it before uploading (blobs are opaque bytes here).
 
 pub mod store;
+pub mod web;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,7 +42,7 @@ pub const MAX_BLOB: usize = 64 << 20;
 
 pub struct AppState {
     pub store: Store,
-    config: Config,
+    pub config: Config,
     webauthn: Webauthn,
     /// Passkey ceremonies in progress (a few minutes at most).
     flows: Mutex<HashMap<String, Flow>>,
@@ -114,6 +115,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/v1/blobs/{name}",
             get(get_blob).put(put_blob).delete(delete_blob),
         )
+        .merge(web::routes())
         .layer(DefaultBodyLimit::max(MAX_BLOB))
         .with_state(state)
 }
@@ -164,11 +166,14 @@ impl FromRequestParts<Arc<AppState>> for Auth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
+        // Computers send a token; the website's pages carry a cookie.
         let token = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::to_owned)
+            .or_else(|| web::session_cookie(&parts.headers))
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "not signed in"))?;
         match state.store.session(token.trim())? {
             Some(s) => Ok(Auth(s)),
@@ -253,7 +258,7 @@ pub struct Token {
 async fn email_finish(
     State(s): State<Arc<AppState>>,
     axum::Json(b): axum::Json<EmailFinish>,
-) -> R<axum::Json<Token>> {
+) -> R<Response> {
     let email = normal_email(&b.email)?;
     if !s.store.check_email_code(&email, &b.code)? {
         return Err(err(
@@ -262,9 +267,7 @@ async fn email_finish(
         ));
     }
     let a = s.store.account_for_email(&email)?;
-    Ok(axum::Json(Token {
-        token: s.store.new_session(&a.id, Kind::Web, "website")?,
-    }))
+    signed_in(&s, s.store.new_session(&a.id, Kind::Web, "website")?)
 }
 
 // ── Passkeys ─────────────────────────────────────────────────────────
@@ -369,7 +372,7 @@ async fn passkey_login_start(
 async fn passkey_login_finish(
     State(s): State<Arc<AppState>>,
     axum::Json(b): axum::Json<Finish<PublicKeyCredential>>,
-) -> R<axum::Json<Token>> {
+) -> R<Response> {
     let Some(Flow::Login { account, state, .. }) = s.flows().remove(&b.flow) else {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -385,9 +388,7 @@ async fn passkey_login_finish(
             s.store.save_passkey(&account, &pk)?;
         }
     }
-    Ok(axum::Json(Token {
-        token: s.store.new_session(&account, Kind::Web, "website")?,
-    }))
+    signed_in(&s, s.store.new_session(&account, Kind::Web, "website")?)
 }
 
 // ── Computers signing in ─────────────────────────────────────────────
@@ -508,9 +509,23 @@ async fn end_session(
     }
 }
 
-async fn sign_out(State(s): State<Arc<AppState>>, auth: Auth) -> R<StatusCode> {
+async fn sign_out(State(s): State<Arc<AppState>>, auth: Auth) -> R<Response> {
     s.store.end_session(&auth.0.account, &auth.0.id)?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((
+        [(axum::http::header::SET_COOKIE, web::clear_cookie(&s))],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+/// A browser signed in: the token as JSON, and as the website's cookie.
+fn signed_in(s: &AppState, token: String) -> R<Response> {
+    let cookie = web::set_cookie(s, &token);
+    Ok((
+        [(axum::http::header::SET_COOKIE, cookie)],
+        axum::Json(Token { token }),
+    )
+        .into_response())
 }
 
 // ── Encrypted data ───────────────────────────────────────────────────
@@ -534,7 +549,7 @@ fn blob_path(s: &AppState, account: &str, name: &str) -> R<PathBuf> {
     }
 }
 
-fn used(s: &AppState, account: &str) -> anyhow::Result<u64> {
+pub(crate) fn used(s: &AppState, account: &str) -> anyhow::Result<u64> {
     let dir = s.blob_dir(account);
     let mut total = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {

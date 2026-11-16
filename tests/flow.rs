@@ -351,3 +351,119 @@ async fn sign_up_passkey_computer_data_and_goodbye() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn the_website_signs_in_with_a_cookie_and_out_again() {
+    let srv = server(1 << 20).await;
+    let page = |cookie: Option<String>, path: &'static str| {
+        let mut r = srv.http.get(format!("{}{path}", srv.base));
+        if let Some(c) = cookie {
+            r = r.header("cookie", c);
+        }
+        r.send()
+    };
+
+    // Signed out: the sign-in form, with strict security headers.
+    let r = page(None, "/").await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let csp = r.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        csp.contains("script-src 'self'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    let body = r.text().await.unwrap();
+    assert!(body.contains("Sign in with a passkey") && !body.contains("Your account"));
+    assert!(
+        page(None, "/device")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+            .contains("first sign in here")
+    );
+    for asset in ["/app.js", "/style.css", "/logo.svg"] {
+        assert_eq!(
+            page(None, asset).await.unwrap().status(),
+            StatusCode::OK,
+            "{asset}"
+        );
+    }
+
+    // An email that is HTML stays text.
+    srv.post(
+        "/v1/email/start",
+        None,
+        json!({ "email": "x<b>@example.com" }),
+    )
+    .await;
+    let code = srv.state.store.new_email_code("x<b>@example.com").unwrap();
+    let r = srv
+        .http
+        .post(format!("{}/v1/email/finish", srv.base))
+        .json(&json!({ "email": "x<b>@example.com", "code": code }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let set = r.headers()["set-cookie"].to_str().unwrap().to_owned();
+    assert!(
+        set.contains("HttpOnly") && set.contains("SameSite=Strict"),
+        "{set}"
+    );
+    let cookie = set.split(';').next().unwrap().to_owned();
+
+    // Signed in: the account page (escaped), and the computer code form.
+    let body = page(Some(cookie.clone()), "/")
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(body.contains("Your account") && body.contains("x&lt;b&gt;@example.com"));
+    assert!(!body.contains("x<b>@"));
+    assert!(
+        page(Some(cookie.clone()), "/device")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+            .contains("Approve")
+    );
+
+    // The cookie works for the API too (the page's buttons), and approves a computer.
+    let (_, dc) = srv
+        .post("/v1/device/code", None, json!({ "name": "pc" }))
+        .await;
+    let r = srv
+        .http
+        .post(format!("{}/v1/device/approve", srv.base))
+        .header("cookie", cookie.clone())
+        .json(&json!({ "user_code": dc["user_code"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // Sign out: the cookie is cleared and no longer works.
+    let r = srv
+        .http
+        .post(format!("{}/v1/signout", srv.base))
+        .header("cookie", cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    assert!(
+        r.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    let body = page(Some(cookie), "/").await.unwrap().text().await.unwrap();
+    assert!(body.contains("Sign in with a passkey"));
+}

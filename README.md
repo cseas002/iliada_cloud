@@ -9,11 +9,18 @@ Iliada runs the default server; anyone can run their own.
 
 ## Status
 
-First version of the account server (`iliada-account`): email codes,
-passkeys, computers signing in with a code (OAuth device flow), encrypted
-blobs per account with a size limit, signing computers out, deleting the
-account. Not yet: the website pages, sending email, Google/Apple, the
-NixOS module, Vaultwarden.
+The account server (`iliada-account`) and its website: sign up with an
+email code, add a passkey, sign in with it, approve a computer's code at
+`/device`, see and sign out your computers, delete the account. Computers
+sign in with the OAuth device flow and keep encrypted blobs (with a size
+limit). Not yet: sending email (codes go to the log while developing),
+Google/Apple, the NixOS module, Vaultwarden.
+
+## Tests
+
+    cargo test                     # the API, with a software passkey
+    bash tests/browser/run.sh      # the website in headless Chromium with a
+                                   # virtual passkey (SHOTS=dir saves screenshots)
 
 ## Run it while developing
 

@@ -1,0 +1,92 @@
+/* The account website. Colours from Iliada's logo (nix/branding/README.md). */
+:root {
+  --navy: #14254a;
+  --navy-glow: #22396a;
+  --bronze: #dda34e;
+  --bronze-light: #f6d38e;
+  --crest: #cf3228;
+  --bg: #f4f1ea;
+  --card: #ffffff;
+  --text: #14254a;
+  --muted: #5a6478;
+  --line: #e3ddd0;
+  --field: #ffffff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1730;
+    --card: #14254a;
+    --text: #f3ecdf;
+    --muted: #aab3c5;
+    --line: #2a3d66;
+    --field: #0d1730;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1.5rem; font-size: 1.5rem; font-weight: 600; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+h2 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
+h2:first-child { margin-top: 0; }
+p { margin: 0.5rem 0; }
+.email { color: var(--muted); margin-bottom: 1rem; }
+label { display: block; font-weight: 600; margin: 1rem 0 0.3rem; }
+input {
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+input:focus { outline: 2px solid var(--bronze); outline-offset: 1px; }
+input.code { font-family: ui-monospace, monospace; font-size: 1.4rem; letter-spacing: 0.15em; text-transform: uppercase; }
+.buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.buttons.spread { justify-content: space-between; margin-top: 0; }
+button {
+  font: inherit;
+  padding: 0.6rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+button:hover { border-color: var(--bronze); }
+button:disabled { opacity: 0.5; cursor: wait; }
+button.primary { background: var(--navy); border-color: var(--navy); color: #fff; }
+@media (prefers-color-scheme: dark) {
+  button.primary { background: var(--bronze); border-color: var(--bronze); color: var(--navy); }
+}
+button.danger { color: var(--crest); border-color: var(--crest); }
+button.small { padding: 0.3rem 0.8rem; font-size: 0.9rem; }
+.row, .list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--line);
+}
+.row div, .list li div { display: flex; flex-direction: column; }
+.row span, .when { color: var(--muted); font-size: 0.9rem; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li.empty { color: var(--muted); display: block; }
+.note { color: var(--muted); font-size: 0.9rem; margin-top: 1rem; }
+.message { min-height: 1.5em; margin-top: 1rem; }
+.message.error { color: var(--crest); }

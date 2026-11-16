@@ -16,6 +16,11 @@ sign in with the OAuth device flow and keep encrypted blobs (with a size
 limit). Not yet: sending email (codes go to the log while developing),
 Google/Apple, the NixOS module, Vaultwarden.
 
+The computer side is in Iliada itself
+([`crates/iliada-account`](https://github.com/cseas002/iliada_os/tree/main/crates/iliada-account):
+Settings → Account, the Setup Assistant, `iliada account`). It seals
+everything with a key the server never sees before uploading it.
+
 ## Tests
 
     cargo test                     # the API, with a software passkey
@@ -36,7 +41,7 @@ Settings (environment): `ILIADA_ACCOUNT_ORIGIN`, `ILIADA_ACCOUNT_LISTEN`,
 | `POST /v1/email/start {email}`, `POST /v1/email/finish {email, code}` → `{token}` | sign in or up with a six-digit code |
 | `POST /v1/passkey/register/start` → `{flow, options}`, `…/finish {flow, credential}` | add a passkey (website) |
 | `POST /v1/passkey/login/start {email}`, `…/finish {flow, credential}` → `{token}` | sign in with a passkey |
-| `POST /v1/device/code {name}` → `{device_code, user_code, verification_uri, interval}` | a computer asks to sign in |
+| `POST /v1/device/code {name}` → `{device_code, user_code, verification_uri, verification_uri_complete, interval}` | a computer asks to sign in |
 | `POST /v1/device/approve {user_code}` (website) | approve it |
 | `POST /v1/device/token {device_code}` → `{token}` (428 while waiting) | the computer collects its token |
 | `GET /v1/account`, `DELETE /v1/account` (website) | the account, its sign-ins, storage used |

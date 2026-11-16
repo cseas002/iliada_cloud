@@ -415,10 +415,13 @@ async fn device_code(
     let (device_code, user_code) = s.store.new_device_code(&name)?;
     let mut verify = s.config.origin.clone();
     verify.set_path("/device");
+    let mut complete = verify.clone();
+    complete.query_pairs_mut().append_pair("code", &user_code);
     Ok(axum::Json(json!({
         "device_code": device_code,
         "user_code": user_code,
         "verification_uri": verify.as_str(),
+        "verification_uri_complete": complete.as_str(),
         "expires_in": store::DEVICE_SECONDS,
         "interval": 5,
     })))

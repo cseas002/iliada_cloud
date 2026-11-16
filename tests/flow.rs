@@ -193,6 +193,14 @@ async fn sign_up_passkey_computer_data_and_goodbye() {
             .unwrap()
             .ends_with("/device")
     );
+    assert_eq!(
+        dc["verification_uri_complete"].as_str().unwrap(),
+        format!(
+            "{}?code={}",
+            dc["verification_uri"].as_str().unwrap(),
+            dc["user_code"].as_str().unwrap()
+        )
+    );
     let device = json!({ "device_code": dc["device_code"] });
     assert_eq!(
         srv.post("/v1/device/token", None, device.clone()).await.0,

@@ -84,6 +84,35 @@ pub enum DeviceState {
     Unknown,
 }
 
+/// How many sign-in emails go out.
+#[derive(Clone, Debug)]
+pub struct SendLimits {
+    /// Seconds between two codes to the same address.
+    pub gap_seconds: i64,
+    /// Codes to one address in an hour.
+    pub per_email_hour: i64,
+    /// Codes to everyone in an hour.
+    pub per_hour: i64,
+}
+
+impl Default for SendLimits {
+    fn default() -> SendLimits {
+        SendLimits {
+            gap_seconds: 30,
+            per_email_hour: 5,
+            per_hour: 500,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Sending {
+    Ok,
+    TooSoon,
+    TooMany,
+    Busy,
+}
+
 pub struct Store {
     db: Mutex<Connection>,
 }
@@ -103,6 +132,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS email_codes (
   email TEXT PRIMARY KEY, code_hash TEXT NOT NULL,
   expires INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS email_sends (
+  email TEXT NOT NULL, sent INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS email_sends_sent ON email_sends (sent);
 CREATE TABLE IF NOT EXISTS device_codes (
   device_hash TEXT PRIMARY KEY, user_code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL, expires INTEGER NOT NULL,
@@ -294,6 +326,35 @@ impl Store {
 
     // ── Email codes ───────────────────────────────────────────────────
 
+    /// Whether a code may be emailed now, and if so, counts it. Keeps the
+    /// server from being used to flood an inbox, or to run up the bill of
+    /// the email service.
+    pub fn may_email(&self, email: &str, limits: &SendLimits) -> Result<Sending> {
+        let db = self.db();
+        let now = now();
+        db.execute("DELETE FROM email_sends WHERE sent < ?1", [now - 3600])?;
+        let (last, to_them): (Option<i64>, i64) = db.query_row(
+            "SELECT MAX(sent), COUNT(*) FROM email_sends WHERE email = ?1",
+            [email],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let all: i64 = db.query_row("SELECT COUNT(*) FROM email_sends", [], |r| r.get(0))?;
+        let answer = if last.is_some_and(|t| now - t < limits.gap_seconds) {
+            Sending::TooSoon
+        } else if to_them >= limits.per_email_hour {
+            Sending::TooMany
+        } else if all >= limits.per_hour {
+            Sending::Busy
+        } else {
+            db.execute(
+                "INSERT INTO email_sends (email, sent) VALUES (?1, ?2)",
+                params![email, now],
+            )?;
+            Sending::Ok
+        };
+        Ok(answer)
+    }
+
     /// A new six-digit code for this email (replacing any earlier one).
     pub fn new_email_code(&self, email: &str) -> Result<String> {
         let code = format!("{:06}", rand::random_range(0..1_000_000u32));
@@ -406,6 +467,31 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn email_limits() {
+        let s = Store::in_memory().unwrap();
+        let l = SendLimits {
+            gap_seconds: 30,
+            per_email_hour: 5,
+            per_hour: 3,
+        };
+        assert_eq!(s.may_email("a@x.org", &l).unwrap(), Sending::Ok);
+        assert_eq!(s.may_email("a@x.org", &l).unwrap(), Sending::TooSoon);
+        let no_gap = SendLimits {
+            gap_seconds: 0,
+            ..l.clone()
+        };
+        assert_eq!(s.may_email("b@x.org", &no_gap).unwrap(), Sending::Ok);
+        assert_eq!(s.may_email("b@x.org", &no_gap).unwrap(), Sending::Ok);
+        assert_eq!(s.may_email("c@x.org", &no_gap).unwrap(), Sending::Busy);
+        let two = SendLimits {
+            gap_seconds: 0,
+            per_email_hour: 2,
+            per_hour: 100,
+        };
+        assert_eq!(s.may_email("b@x.org", &two).unwrap(), Sending::TooMany);
+    }
+
     use super::*;
 
     #[test]

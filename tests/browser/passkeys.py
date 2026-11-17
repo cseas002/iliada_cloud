@@ -18,7 +18,7 @@ import urllib.request
 
 from websockets.sync.client import connect
 
-BASE = "http://localhost:8480"
+BASE = os.environ.get("BASE", "http://localhost:8480")
 LOG = sys.argv[1]
 
 

@@ -14,7 +14,10 @@ py=$(nix build --no-link --print-out-paths --impure --expr \
   'with (builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem}; python3.withPackages (p: [ p.websockets ])')
 cargo build -q
 
-ILIADA_ACCOUNT_LOG_CODES=1 ILIADA_ACCOUNT_DATA="$work/data" NO_COLOR=1 RUST_LOG=info \
+# Its own port, so a server left running for the dev VM (8480) is no matter.
+port=8483
+export BASE="http://localhost:$port"
+ILIADA_ACCOUNT_LOG_CODES=1 ILIADA_ACCOUNT_DATA="$work/data" ILIADA_ACCOUNT_LISTEN="127.0.0.1:$port" ILIADA_ACCOUNT_ORIGIN="$BASE" NO_COLOR=1 RUST_LOG=info \
   target/debug/iliada-account > "$work/server.log" 2>&1 &
 server=$!
 "$chromium" --headless=new --no-sandbox --disable-gpu --remote-debugging-port=9222 \
@@ -22,7 +25,7 @@ server=$!
 browser=$!
 
 for _ in $(seq 100); do
-  curl -sf http://127.0.0.1:9222/json >/dev/null && curl -sf http://localhost:8480/ >/dev/null && break
+  curl -sf http://127.0.0.1:9222/json >/dev/null && curl -sf "$BASE/" >/dev/null && break
   sleep 0.3
 done
 

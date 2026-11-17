@@ -13,8 +13,9 @@ The account server (`iliada-account`) and its website: sign up with an
 email code, add a passkey, sign in with it, approve a computer's code at
 `/device`, see and sign out your computers, delete the account. Computers
 sign in with the OAuth device flow and keep encrypted blobs (with a size
-limit). Not yet: sending email (codes go to the log while developing),
-Google/Apple, the NixOS module, Vaultwarden.
+limit). Sign-in codes are emailed through any SMTP service (Postmark, Resend,
+Amazon SES, your own), at most one every 30 seconds and five an hour per
+address. Not yet: Google/Apple, the NixOS module, Vaultwarden.
 
 The computer side is in Iliada itself
 ([`crates/iliada-account`](https://github.com/cseas002/iliada_os/tree/main/crates/iliada-account):
@@ -32,7 +33,10 @@ everything with a key the server never sees before uploading it.
     ILIADA_ACCOUNT_LOG_CODES=1 cargo run      # http://localhost:8480, codes in the log
 
 Settings (environment): `ILIADA_ACCOUNT_ORIGIN`, `ILIADA_ACCOUNT_LISTEN`,
-`ILIADA_ACCOUNT_DATA`, `ILIADA_ACCOUNT_QUOTA_MB`, `ILIADA_ACCOUNT_LOG_CODES`.
+`ILIADA_ACCOUNT_DATA`, `ILIADA_ACCOUNT_QUOTA_MB`, `ILIADA_ACCOUNT_LOG_CODES`;
+for email `ILIADA_ACCOUNT_SMTP_URL_FILE` (a file holding
+`smtps://user:password@smtp.example.com`) and `ILIADA_ACCOUNT_MAIL_FROM`
+(`Iliada <account@example.org>`). See `src/main.rs`.
 
 ## API (v1, JSON; `Authorization: Bearer <token>`)
 

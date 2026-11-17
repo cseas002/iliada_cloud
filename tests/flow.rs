@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use iliada_account::{AppState, Config, Started, Token, router, store::Store};
+use iliada_account::mail::Mail;
+use iliada_account::store::{SendLimits, Store};
+use iliada_account::{AppState, Config, Started, Token, router};
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use webauthn_authenticator_rs::WebauthnAuthenticator;
@@ -21,6 +23,18 @@ struct Server {
 }
 
 async fn server(quota: u64) -> Server {
+    server_with(quota, Mail::Log, test_limits()).await
+}
+
+/// The tests ask for several codes in a row.
+fn test_limits() -> SendLimits {
+    SendLimits {
+        gap_seconds: 0,
+        ..SendLimits::default()
+    }
+}
+
+async fn server_with(quota: u64, mail: Mail, send_limits: SendLimits) -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let origin: Url = format!("http://localhost:{port}").parse().unwrap();
@@ -28,7 +42,8 @@ async fn server(quota: u64) -> Server {
     let config = Config {
         origin: origin.clone(),
         data_dir: dir.path().to_owned(),
-        log_email_codes: true,
+        mail,
+        send_limits,
         quota,
     };
     let state = AppState::new(config, Store::in_memory().unwrap()).unwrap();
@@ -474,4 +489,109 @@ async fn the_website_signs_in_with_a_cookie_and_out_again() {
     );
     let body = page(Some(cookie), "/").await.unwrap().text().await.unwrap();
     assert!(body.contains("Sign in with a passkey"));
+}
+
+/// A mail server that takes one message and hands its text back.
+async fn one_email() -> (u16, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        let (r, mut w) = sock.into_split();
+        let mut lines = BufReader::new(r).lines();
+        w.write_all(b"220 test\r\n").await.unwrap();
+        let mut message = String::new();
+        let mut in_data = false;
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if in_data {
+                if line == "." {
+                    in_data = false;
+                    w.write_all(b"250 ok\r\n").await.unwrap();
+                } else {
+                    message.push_str(&line);
+                    message.push('\n');
+                }
+                continue;
+            }
+            let verb = line.split_whitespace().next().unwrap_or("").to_uppercase();
+            let answer: &[u8] = match verb.as_str() {
+                "EHLO" | "HELO" => b"250 test\r\n",
+                "DATA" => {
+                    in_data = true;
+                    b"354 go on\r\n"
+                }
+                "QUIT" => {
+                    w.write_all(b"221 bye\r\n").await.unwrap();
+                    break;
+                }
+                _ => b"250 ok\r\n",
+            };
+            w.write_all(answer).await.unwrap();
+        }
+        message
+    });
+    (port, task)
+}
+
+#[tokio::test]
+async fn sign_in_codes_are_emailed() {
+    let (port, email) = one_email().await;
+    let mail = Mail::smtp(
+        &format!("smtp://127.0.0.1:{port}"),
+        "Iliada <account@example.org>",
+    )
+    .unwrap();
+    let srv = server_with(1 << 20, mail, test_limits()).await;
+    let (s, _) = srv
+        .post(
+            "/v1/email/start",
+            None,
+            json!({ "email": "Ana@Example.com" }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let message = email.await.unwrap();
+    assert!(message.contains("To: ana@example.com"), "{message}");
+    assert!(
+        message.contains("From: Iliada <account@example.org>"),
+        "{message}"
+    );
+    let code = message
+        .lines()
+        .find_map(|l| l.strip_prefix("Subject: "))
+        .and_then(|s| s.split_whitespace().next())
+        .expect("the code in the subject")
+        .to_owned();
+    assert_eq!(code.len(), 6);
+    assert!(message.contains(&format!("    {code}")), "{message}");
+
+    let (s, v) = srv
+        .post(
+            "/v1/email/finish",
+            None,
+            json!({ "email": "ana@example.com", "code": code }),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["token"].is_string());
+}
+
+#[tokio::test]
+async fn a_second_code_waits() {
+    let srv = server_with(1 << 20, Mail::Log, SendLimits::default()).await;
+    let ask = || {
+        srv.post(
+            "/v1/email/start",
+            None,
+            json!({ "email": "ana@example.com" }),
+        )
+    };
+    assert_eq!(ask().await.0, StatusCode::NO_CONTENT);
+    let (s, v) = ask().await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        v["error"].as_str().unwrap().contains("half a minute"),
+        "{v}"
+    );
 }

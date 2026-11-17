@@ -5,6 +5,7 @@
 //! The server never sees anyone's data in readable form: computers encrypt
 //! it before uploading (blobs are opaque bytes here).
 
+pub mod mail;
 pub mod store;
 pub mod web;
 
@@ -21,7 +22,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use store::{DeviceState, Kind, Session, Store};
+use store::{DeviceState, Kind, Sending, Session, Store};
 use webauthn_rs::prelude::*;
 
 /// How the server is set up.
@@ -31,8 +32,10 @@ pub struct Config {
     pub origin: Url,
     /// Where accounts and their data are kept.
     pub data_dir: PathBuf,
-    /// Development only: email codes are written to the log instead of sent.
-    pub log_email_codes: bool,
+    /// How sign-in codes reach people (or the log, while developing).
+    pub mail: mail::Mail,
+    /// How many sign-in emails may go out.
+    pub send_limits: store::SendLimits,
     /// What each account may keep, in bytes.
     pub quota: u64,
 }
@@ -231,17 +234,32 @@ async fn email_start(
     axum::Json(b): axum::Json<EmailStart>,
 ) -> R<StatusCode> {
     let email = normal_email(&b.email)?;
-    let code = s.store.new_email_code(&email)?;
-    if s.config.log_email_codes {
-        tracing::info!(%email, %code, "sign-in code (development: not emailed)");
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        // Sending email comes with hosting (see docs/account.md).
-        Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this server can't send email yet",
-        ))
+    let wait = |m: &str| Err(err(StatusCode::TOO_MANY_REQUESTS, m));
+    match s.store.may_email(&email, &s.config.send_limits)? {
+        Sending::Ok => {}
+        Sending::TooSoon => {
+            return wait(
+                "we just sent a code to that address; wait half a minute before asking for another",
+            );
+        }
+        Sending::TooMany => {
+            return wait(
+                "that address has had several codes this hour; use the last one, or try again later",
+            );
+        }
+        Sending::Busy => {
+            return wait("too many people are signing in right now; try again in a few minutes");
+        }
     }
+    let code = s.store.new_email_code(&email)?;
+    if let Err(e) = s.config.mail.send_code(&email, &code).await {
+        tracing::error!("{e:#}");
+        return Err(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the email couldn't be sent; try again in a minute",
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

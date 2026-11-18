@@ -3,7 +3,7 @@
 The server behind the **Iliada account**: sign up with a passkey (later
 Google and Apple), approve your computers with a code, and keep your
 settings and data, encrypted on your computer before they leave it. The
-design is in [iliada_os/docs/account.md](https://github.com/cseas002/iliada_os/blob/main/docs/account.md).
+design is in [iliada/docs/account.md](https://github.com/iliada-os/iliada/blob/main/docs/account.md).
 
 Iliada runs the default server; anyone can run their own.
 
@@ -18,7 +18,7 @@ Amazon SES, your own), at most one every 30 seconds and five an hour per
 address. Not yet: Google/Apple, the NixOS module, Vaultwarden.
 
 The computer side is in Iliada itself
-([`crates/iliada-account`](https://github.com/cseas002/iliada_os/tree/main/crates/iliada-account):
+([`crates/iliada-account`](https://github.com/iliada-os/iliada/tree/main/crates/iliada-account):
 Settings → Account, the Setup Assistant, `iliada account`). It seals
 everything with a key the server never sees before uploading it.
 

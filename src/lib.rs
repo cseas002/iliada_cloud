@@ -5,6 +5,7 @@
 //! The server never sees anyone's data in readable form: computers encrypt
 //! it before uploading (blobs are opaque bytes here).
 
+pub mod keys;
 pub mod mail;
 pub mod store;
 pub mod web;
@@ -49,6 +50,8 @@ pub struct AppState {
     webauthn: Webauthn,
     /// Passkey ceremonies in progress (a few minutes at most).
     flows: Mutex<HashMap<String, Flow>>,
+    /// New computers waiting for the account key (see keys.rs).
+    keys: keys::Requests,
 }
 
 enum Flow {
@@ -82,6 +85,7 @@ impl AppState {
             config,
             webauthn,
             flows: Mutex::new(HashMap::new()),
+            keys: keys::Requests::default(),
         }))
     }
 
@@ -113,6 +117,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/account", get(account).delete(delete_account))
         .route("/v1/sessions/{id}", delete(end_session))
         .route("/v1/signout", post(sign_out))
+        .route("/v1/keys", get(keys::list).post(keys::ask))
+        .route("/v1/keys/{id}", get(keys::status))
+        .route("/v1/keys/{id}/approve", post(keys::approve))
+        .route("/v1/keys/{id}/refuse", post(keys::refuse))
         .route("/v1/blobs", get(list_blobs))
         .route(
             "/v1/blobs/{name}",
@@ -129,7 +137,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 #[derive(Debug)]
 pub struct Error(StatusCode, String);
 
-fn err(status: StatusCode, msg: impl Into<String>) -> Error {
+pub(crate) fn err(status: StatusCode, msg: impl Into<String>) -> Error {
     Error(status, msg.into())
 }
 
@@ -156,7 +164,7 @@ impl From<WebauthnError> for Error {
     }
 }
 
-type R<T> = Result<T, Error>;
+pub(crate) type R<T> = Result<T, Error>;
 
 // ── Who is asking ────────────────────────────────────────────────────
 

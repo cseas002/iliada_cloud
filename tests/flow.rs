@@ -595,3 +595,137 @@ async fn a_second_code_waits() {
         "{v}"
     );
 }
+
+impl Server {
+    /// A computer signed in to `web`'s account with an approved code.
+    async fn computer(&self, web: &str, name: &str) -> String {
+        let (_, dc) = self
+            .post("/v1/device/code", None, json!({ "name": name }))
+            .await;
+        let (s, _) = self
+            .post(
+                "/v1/device/approve",
+                Some(web),
+                json!({ "user_code": dc["user_code"] }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, v) = self
+            .post(
+                "/v1/device/token",
+                None,
+                json!({ "device_code": dc["device_code"] }),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        v["token"].as_str().unwrap().to_owned()
+    }
+}
+
+#[tokio::test]
+async fn a_signed_in_computer_hands_the_key_to_a_new_one() {
+    let srv = server(1 << 20).await;
+    let web = srv.email_sign_in("ana@example.com").await;
+    let old = srv.computer(&web, "ana-laptop").await;
+    let new = srv.computer(&web, "ana-desktop").await;
+    let other_web = srv.email_sign_in("bob@example.com").await;
+    let bob = srv.computer(&other_web, "bob-pc").await;
+    let public_key = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="; // 32 bytes
+
+    // Only computers take part, and a public key is 32 bytes.
+    let ask = json!({ "public_key": public_key });
+    assert_eq!(
+        srv.post("/v1/keys", Some(&web), ask.clone()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        srv.post("/v1/keys", Some(&new), json!({ "public_key": "AAEC" }))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // The new computer asks; the old one sees it, the asker and others don't.
+    let (s, v) = srv.post("/v1/keys", Some(&new), ask.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let (_, v) = srv.get("/v1/keys", &old).await;
+    assert_eq!(v["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(v["requests"][0]["computer"], "ana-desktop");
+    assert_eq!(v["requests"][0]["public_key"], public_key);
+    assert_eq!(
+        srv.get("/v1/keys", &new).await.1["requests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        srv.get("/v1/keys", &bob).await.1["requests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        srv.get(&format!("/v1/keys/{id}"), &new).await.1["state"],
+        "waiting"
+    );
+    assert_eq!(
+        srv.get(&format!("/v1/keys/{id}"), &old).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Another account, or the asker itself, can't answer.
+    let sealed = json!({ "sealed": "c2VhbGVk" });
+    let approve = format!("/v1/keys/{id}/approve");
+    assert_eq!(
+        srv.post(&approve, Some(&bob), sealed.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        srv.post(&approve, Some(&new), sealed.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The old computer answers once; the new one takes it once.
+    assert_eq!(
+        srv.post(&approve, Some(&old), sealed.clone()).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        srv.post(&approve, Some(&old), sealed).await.0,
+        StatusCode::CONFLICT
+    );
+    let (s, v) = srv.get(&format!("/v1/keys/{id}"), &new).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["state"], "answered");
+    assert_eq!(v["sealed"], "c2VhbGVk");
+    assert_eq!(
+        srv.get(&format!("/v1/keys/{id}"), &new).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Asked again and refused.
+    let id = srv.post("/v1/keys", Some(&new), ask).await.1["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        srv.post(&format!("/v1/keys/{id}/refuse"), Some(&old), json!({}))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        srv.get("/v1/keys", &old).await.1["requests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        srv.get(&format!("/v1/keys/{id}"), &new).await.1["state"],
+        "refused"
+    );
+}
